@@ -8,21 +8,62 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPri
 TOKEN = "8631846961:AAGpjWYBTBugvefFkiWBSucihBEZBthlY2M"
 bot = telebot.TeleBot(TOKEN)
 
+# Активные дуэли: {duel_id: {"p1": chat_id1, "p2": chat_id2, "bet": amount, "deck": [...], "p1_cards": [...], "p2_cards": [...], "p1_stand": False, "p2_stand": False}}
+ACTIVE_DUELS = {}
+
 # --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect("game.db", check_same_thread=False)
     cursor = conn.cursor()
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             chat_id INTEGER PRIMARY KEY,
             balance REAL DEFAULT 15.0,
             properties TEXT DEFAULT "",
             investments TEXT DEFAULT "",
+            accessories TEXT DEFAULT "",
+            equipped_accessory TEXT DEFAULT "",
             last_bonus INTEGER DEFAULT 0,
             quest_stage INTEGER DEFAULT 1,
             quest_claimed INTEGER DEFAULT 0
         )
     ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS market (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            seller_id INTEGER,
+            seller_name TEXT,
+            item_name TEXT,
+            price REAL
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS auction (
+            id INTEGER PRIMARY KEY,
+            item_name TEXT,
+            current_price REAL,
+            highest_bidder INTEGER,
+            highest_bidder_name TEXT,
+            end_time INTEGER
+        )
+    ''')
+    
+    cursor.execute("SELECT id FROM auction WHERE id = 1")
+    if not cursor.fetchone():
+        end_time = int(time.time()) + 21600
+        initial_items = [
+            "🗡️ Меч самурая", "🏺 Древняя ваза", "⚡ Энергетик", 
+            "🥷 Ниндзя-сюрикен", "👑 Золотая корона", "🍫 Шоколадка Feastables", 
+            "🥤 Стаканчик газировки MrBeast", "🍕 Огромный кусок пиццы", 
+            "🍔 Мега-бургер с тройным сыром", "🍩 Глазированный пончик"
+        ]
+        item = random.choice(initial_items)
+        cursor.execute("INSERT INTO auction (id, item_name, current_price, highest_bidder, highest_bidder_name, end_time) VALUES (1, ?, ?, 0, ?, ?)",
+                       (item, 1000.0, "Никто", end_time))
+                       
     conn.commit()
     conn.close()
 
@@ -31,17 +72,19 @@ init_db()
 def get_user(chat_id):
     conn = sqlite3.connect("game.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT balance, properties, investments, last_bonus, quest_stage, quest_claimed FROM users WHERE chat_id = ?", (chat_id,))
+    cursor.execute("SELECT balance, properties, investments, accessories, equipped_accessory, last_bonus, quest_stage, quest_claimed FROM users WHERE chat_id = ?", (chat_id,))
     row = cursor.fetchone()
     if not row:
-        cursor.execute("INSERT INTO users (chat_id, balance, properties, investments, last_bonus, quest_stage, quest_claimed) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                       (chat_id, 15.0, "", "", 0, 1, 0))
+        cursor.execute("INSERT INTO users (chat_id, balance, properties, investments, accessories, equipped_accessory, last_bonus, quest_stage, quest_claimed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+                       (chat_id, 15.0, "", "", "", "", 0, 1, 0))
         conn.commit()
-        user_data = {"balance": 15.0, "properties": [], "investments": [], "last_bonus": 0, "quest_stage": 1, "quest_claimed": 0}
+        user_data = {"balance": 15.0, "properties": [], "investments": [], "accessories": [], "equipped": "", "last_bonus": 0, "quest_stage": 1, "quest_claimed": 0}
     else:
         props = row[1].split(",") if row[1] else []
         invs = row[2].split(",") if row[2] else []
-        user_data = {"balance": row[0], "properties": props, "investments": invs, "last_bonus": row[3], "quest_stage": row[4], "quest_claimed": row[5]}
+        accs = row[3].split(",") if row[3] else []
+        equipped = row[4] if row[4] else ""
+        user_data = {"balance": row[0], "properties": props, "investments": invs, "accessories": accs, "equipped": equipped, "last_bonus": row[5], "quest_stage": row[6], "quest_claimed": row[7]}
     conn.close()
     return user_data
 
@@ -50,12 +93,14 @@ def save_user(chat_id, user_data):
     cursor = conn.cursor()
     props_str = ",".join(user_data["properties"])
     invs_str = ",".join(user_data["investments"])
-    cursor.execute("UPDATE users SET balance = ?, properties = ?, investments = ?, last_bonus = ?, quest_stage = ?, quest_claimed = ? WHERE chat_id = ?",
-                   (user_data["balance"], props_str, invs_str, user_data["last_bonus"], user_data["quest_stage"], user_data["quest_claimed"], chat_id))
+    accs_str = ",".join(user_data["accessories"])
+    equipped_str = user_data["equipped"]
+    cursor.execute("UPDATE users SET balance = ?, properties = ?, investments = ?, accessories = ?, equipped_accessory = ?, last_bonus = ?, quest_stage = ?, quest_claimed = ? WHERE chat_id = ?",
+                   (user_data["balance"], props_str, invs_str, accs_str, equipped_str, user_data["last_bonus"], user_data["quest_stage"], user_data["quest_claimed"], chat_id))
     conn.commit()
     conn.close()
 
-# --- ОБЫЧНЫЕ БИЗНЕСЫ ---
+# --- БИЗНЕСЫ И ИНВЕСТИЦИИ ---
 HOUSES = {
     "house_1": {"name": "🏠 Шалаш", "price": 20, "income": round(0.6 / 3, 2)},
     "house_2": {"name": "🛖 Хижина", "price": 50, "income": round(1.8 / 3, 2)},
@@ -79,16 +124,14 @@ HOUSES = {
     "house_20": {"name": "🌐 Корпоративный город", "price": 140000000, "income": round(9000000.0 / 3, 2)}
 }
 
-# --- ДОНАТ-БИЗНЕСЫ ЗА ЗВЕЗДЫ ---
 STAR_HOUSES = {
-    "star_cafe": {"name": "⭐ Звездная Кофейня", "price": 5, "income": 602000.0},
-    "star_1": {"name": "💎 Звездная IT-Корпорация", "price": 15, "income": 2102000.0},
-    "star_2": {"name": "🚀 Звездный Космопорт", "price": 40, "income": 7202000.0},
-    "star_3": {"name": "🛰️ Звездная Спутниковая связь", "price": 100, "income": 27002000.0},
-    "star_4": {"name": "🌌 Межгалактический Звездный Банк", "price": 250, "income": 90002000.0}
+    "star_cafe": {"name": "⭐ Звездная Кофейня", "price": 2, "income": 500.0},
+    "star_1": {"name": "💎 Звездная IT-Корпорация", "price": 5, "income": 1500.0},
+    "star_2": {"name": "🚀 Звездный Космопорт", "price": 10, "income": 4000.0},
+    "star_3": {"name": "🛰️ Звездная Спутниковая связь", "price": 20, "income": 9500.0},
+    "star_4": {"name": "🌌 Межгалактический Звездный Банк", "price": 40, "income": 20000.0}
 }
 
-# --- ИНВЕСТИЦИИ ---
 INVESTMENTS = {
     "inv_0": {"name": "☕ Кофейный ларек (Старт)", "price": 10, "income": round(18.0 / 9, 2)},
     "inv_1": {"name": "🌱 Крипто-ферма", "price": 75, "income": round(24.0 / 9, 2)},
@@ -108,86 +151,224 @@ QUESTS = {
     3: {"title": "Крупный шаг: приобрети Лачугу", "target_prop": "🏚️ Лачуга", "reward": 20.0}
 }
 
-# Фоновый поток начислений дохода (раз в минуту)
-def income_loop():
+def background_worker():
     while True:
         time.sleep(60)
-        conn = sqlite3.connect("game.db", check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id, balance, properties, investments FROM users")
-        rows = cursor.fetchall()
-        
-        for row in rows:
-            chat_id = row[0]
-            balance = row[1]
-            props = row[2].split(",") if row[2] else []
-            invs = row[3].split(",") if row[3] else []
+        try:
+            conn = sqlite3.connect("game.db", check_same_thread=False)
+            cursor = conn.cursor()
             
-            total_income = 0.0
-            for p in props:
-                for item in {**HOUSES, **STAR_HOUSES}.values():
-                    if item["name"] == p:
-                        total_income += item["income"]
-            for inv in invs:
-                for item in INVESTMENTS.values():
-                    if item["name"] == inv:
-                        total_income += item["income"]
-            
-            if total_income > 0:
-                new_balance = balance + total_income
-                cursor.execute("UPDATE users SET balance = ? WHERE chat_id = ?", (new_balance, chat_id))
-        
-        conn.commit()
-        conn.close()
+            cursor.execute("SELECT item_name, current_price, highest_bidder, end_time FROM auction WHERE id = 1")
+            row = cursor.fetchone()
+            if row:
+                item_name, current_price, highest_bidder, end_time = row
+                if int(time.time()) >= end_time:
+                    if highest_bidder > 0:
+                        cursor.execute("SELECT accessories FROM users WHERE chat_id = ?", (highest_bidder,))
+                        u_row = cursor.fetchone()
+                        if u_row:
+                            accs = u_row[0].split(",") if u_row[0] else []
+                            accs.append(item_name)
+                            cursor.execute("UPDATE users SET accessories = ? WHERE chat_id = ?", (",".join(accs), highest_bidder))
+                    
+                    unique_items = [
+                        "🗡️ Меч самурая", "🏺 Древняя ваза", "⚡ Энергетик", 
+                        "🥷 Ниндзя-сюрикен", "👑 Золотая корона", "🍫 Шоколадка Feastables", 
+                        "🥤 Стаканчик газировки MrBeast", "🍕 Огромный кусок пиццы", 
+                        "🍔 Мега-бургер с тройным сыром", "🍩 Глазированный пончик"
+                    ]
+                    new_item = random.choice(unique_items)
+                    new_end_time = int(time.time()) + 21600
+                    cursor.execute("UPDATE auction SET item_name = ?, current_price = ?, highest_bidder = 0, highest_bidder_name = 'Никто', end_time = ? WHERE id = 1",
+                                   (new_item, 1000.0, new_end_time))
+                    conn.commit()
 
-threading.Thread(target=income_loop, daemon=True).start()
+            cursor.execute("SELECT chat_id, balance, properties, investments FROM users")
+            users_rows = cursor.fetchall()
+            for u in users_rows:
+                chat_id, balance, props_str, invs_str = u[0], u[1], u[2], u[3]
+                props = props_str.split(",") if props_str else []
+                invs = invs_str.split(",") if invs_str else []
+                
+                total_income = 0.0
+                for p in props:
+                    for item in {**HOUSES, **STAR_HOUSES}.values():
+                        if item["name"] == p:
+                            total_income += item["income"]
+                for inv in invs:
+                    for item in INVESTMENTS.values():
+                        if item["name"] == inv:
+                            total_income += item["income"]
+                
+                if total_income > 0:
+                    new_balance = balance + total_income
+                    cursor.execute("UPDATE users SET balance = ? WHERE chat_id = ?", (new_balance, chat_id))
+            
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Ошибка в фоновом потоке: {e}")
+
+threading.Thread(target=background_worker, daemon=True).start()
 
 def main_menu_markup():
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("💰 Баланс", callback_data="balance"), InlineKeyboardButton("📊 Доход", callback_data="income_info"))
-    markup.row(InlineKeyboardButton("🏢 Бизнесы (20 шт.)", callback_data="shop"), InlineKeyboardButton("⭐ Донат-бизнесы", callback_data="star_shop"))
+    markup.row(InlineKeyboardButton("👤 Профиль", callback_data="profile_menu"), InlineKeyboardButton("💰 Баланс", callback_data="balance"))
+    markup.row(InlineKeyboardButton("📊 Доход", callback_data="income_info"), InlineKeyboardButton("⏰ Бонус (+3)", callback_data="hourly_bonus"))
+    markup.row(InlineKeyboardButton("🏢 Бизнесы", callback_data="shop"), InlineKeyboardButton("⭐ Донат-бизнесы", callback_data="star_shop"))
     markup.row(InlineKeyboardButton("📈 Инвестиции", callback_data="invest_menu"), InlineKeyboardButton("🛍️ Доступные", callback_data="available_shop"))
-    markup.row(InlineKeyboardButton("🎰 Казино", callback_data="casino_menu"), InlineKeyboardButton("📜 Задания", callback_data="quests_menu"))
-    markup.row(InlineKeyboardButton("📂 Мое имущество", callback_data="my_props"), InlineKeyboardButton("⏰ Бонус (3 монеты)", callback_data="hourly_bonus"))
-    markup.row(InlineKeyboardButton("📢 Каналы", callback_data="channels"))
+    markup.row(InlineKeyboardButton("🎲 Аукцион (6ч)", callback_data="auction_menu"), InlineKeyboardButton("🛒 Рынок P2P", callback_data="market_menu"))
+    markup.row(InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory_menu"), InlineKeyboardButton("📂 Имущество", callback_data="my_props"))
+    markup.row(InlineKeyboardButton("📜 Задания", callback_data="quests_menu"), InlineKeyboardButton("📢 Каналы", callback_data="channels"))
     return markup
 
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     get_user(message.chat.id)
-    bot.send_message(message.chat.id, "🌆 Добро пожаловать! Минимальная ставка в казино теперь 500 монет.", reply_markup=main_menu_markup())
+    bot.send_message(message.chat.id, "🌆 Добро пожаловать! Бот успешно запущен и готов к работе.", reply_markup=main_menu_markup())
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     chat_id = call.message.chat.id
     user = get_user(chat_id)
     
-    if call.data == "balance":
+    # --- ПРОФИЛЬ ИГРОКА ---
+    if call.data == "profile_menu":
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"💰 Твой баланс: {round(user['balance'], 2)} монет",
-            reply_markup=main_menu_markup()
+        name = call.from_user.first_name if call.from_user.first_name else "Игрок"
+        equipped = f"✨ {user['equipped']}" if user['equipped'] else "✨ Ничего"
+        
+        text = (
+            f"👤 **Профиль игрока**\n\n"
+            f"🏷️ Имя: **{name}**\n"
+            f"🆔 Ваш игровой ID: `{chat_id}`\n"
+            f"💰 Баланс: **{round(user['balance'], 2)} монет**\n"
+            f"🎒 Надетый аксессуар: {equipped}\n\n"
+            f"🎮 *Сражайтесь с другими игроками 1 на 1!*"
         )
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("🃏 Игра 21 (Дуэль)", callback_data="blackjack_menu"))
+        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
+
+    # --- МЕНЮ ДУЭЛИ 21 ОЧКО ---
+    elif call.data == "blackjack_menu":
+        bot.answer_callback_query(call.id)
+        text = (
+            f"🃏 **Дуэль в 21 очко (1 на 1)**\n\n"
+            f"Правила: Бросьте вызов любому игроку по его ID, указав ставку. "
+            f"После того как он примет бой, вам обоим раздадутся карты. "
+            f"Побеждает тот, кто наберет больше очков, но не превысит 21!\n\n"
+            f"Нажмите кнопку ниже, чтобы создать вызов:"
+        )
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("⚔️ Создать вызов на бой", callback_data="bj_create_challenge"))
+        markup.row(InlineKeyboardButton("🔙 В профиль", callback_data="profile_menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
+
+    elif call.data == "bj_create_challenge":
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(
+            chat_id, 
+            "✍️ Отправьте в чат **ID соперника и ставку** через запятую.\nПример: `123456789, 50`", 
+            parse_mode="Markdown"
+        )
+        bot.register_next_step_handler(msg, process_bj_challenge)
+
+    elif call.data.startswith("bj_accept_"):
+        try:
+            p1_id = int(call.data.replace("bj_accept_", ""))
+            p2_id = chat_id
+            
+            # Проверяем, есть ли такой вызов или дуэль уже идет
+            found_key = None
+            for k, d in ACTIVE_DUELS.items():
+                if d["p1"] == p1_id and d["p2"] == p2_id and not d.get("accepted"):
+                    found_key = k
+                    break
+            
+            if not found_key:
+                bot.answer_callback_query(call.id, "Срок вызова истек или он уже неактивен.", show_alert=True)
+                return
+                
+            duel = ACTIVE_DUELS[found_key]
+            bet = duel["bet"]
+            
+            p1_data = get_user(p1_id)
+            p2_data = get_user(p2_id)
+            
+            if p1_data["balance"] < bet or p2_data["balance"] < bet:
+                bot.answer_callback_query(call.id, "У одного из игроков недостаточно средств для ставки!", show_alert=True)
+                del ACTIVE_DUELS[found_key]
+                return
+                
+            # Списываем ставки
+            p1_data["balance"] -= bet
+            p2_data["balance"] -= bet
+            save_user(p1_id, p1_data)
+            save_user(p2_id, p2_data)
+            
+            duel["accepted"] = True
+            
+            # Колода карт и раздача стартовых 2 карт
+            deck = [2, 3, 4, 6, 7, 8, 9, 10, 2, 3, 4, 6, 7, 8, 9, 10, 11, 4] * 4 # Упрощенный пул очков
+            random.shuffle(deck)
+            
+            duel["deck"] = deck
+            duel["p1_cards"] = [deck.pop(), deck.pop()]
+            duel["p2_cards"] = [deck.pop(), deck.pop()]
+            
+            bot.answer_callback_query(call.id, "Бой принят! Раздача карт...", show_alert=True)
+            send_bj_table(found_key)
+            
+        except Exception as e:
+            bot.answer_callback_query(call.id, "Ошибка при принятии вызова", show_alert=True)
+
+    elif call.data.startswith("bj_decline_"):
+        p1_id = int(call.data.replace("bj_decline_", ""))
+        bot.answer_callback_query(call.id, "Вы отклонили вызов.", show_alert=True)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="❌ Вы отклонили вызов на дуэль.")
+        try:
+            bot.send_message(p1_id, "❌ Соперник отклонил ваш вызов на дуэль в 21.")
+        except:
+            pass
+
+    elif call.data.startswith("bj_hit_"):
+        duel_id = call.data.replace("bj_hit_", "")
+        if duel_id in ACTIVE_DUELS:
+            duel = ACTIVE_DUELS[duel_id]
+            if chat_id == duel["p1"]:
+                duel["p1_cards"].append(duel["deck"].pop())
+                if sum(duel["p1_cards"]) > 21:
+                    duel["p1_stand"] = True
+            elif chat_id == duel["p2"]:
+                duel["p2_cards"].append(duel["deck"].pop())
+                if sum(duel["p2_cards"]) > 21:
+                    duel["p2_stand"] = True
+            bot.answer_callback_query(call.id, "Карта взята!")
+            check_bj_finish(duel_id)
+
+    elif call.data.startswith("bj_stand_"):
+        duel_id = call.data.replace("bj_stand_", "")
+        if duel_id in ACTIVE_DUELS:
+            duel = ACTIVE_DUELS[duel_id]
+            if chat_id == duel["p1"]:
+                duel["p1_stand"] = True
+            elif chat_id == duel["p2"]:
+                duel["p2_stand"] = True
+            bot.answer_callback_query(call.id, "Вы остановились.")
+            check_bj_finish(duel_id)
+
+    # --- ОСТАЛЬНОЕ МЕНЮ ---
+    elif call.data == "balance":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"💰 Твой баланс: {round(user['balance'], 2)} монет", reply_markup=main_menu_markup())
         
     elif call.data == "income_info":
         bot.answer_callback_query(call.id)
-        total_income = 0.0
-        for p in user["properties"]:
-            for item in {**HOUSES, **STAR_HOUSES}.values():
-                if item["name"] == p:
-                    total_income += item["income"]
-        for inv in user["investments"]:
-            for item in INVESTMENTS.values():
-                if item["name"] == inv:
-                    total_income += item["income"]
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text=f"📊 Твой общий пассивный доход: {round(total_income, 2)} монет в минуту",
-            reply_markup=main_menu_markup()
-        )
+        total_income = sum(item["income"] for p in user["properties"] for item in {**HOUSES, **STAR_HOUSES}.values() if item["name"] == p)
+        total_income += sum(item["income"] for inv in user["investments"] for item in INVESTMENTS.values() if item["name"] == inv)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"📊 Общий пассивный доход: {round(total_income, 2)} монет/мин", reply_markup=main_menu_markup())
         
     elif call.data == "shop":
         bot.answer_callback_query(call.id)
@@ -195,7 +376,7 @@ def callback_handler(call):
         for key, item in HOUSES.items():
             markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/мин)", callback_data=f"buy_coin_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🏪 Магазин бизнесов (20 уровней):", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🏪 Магазин бизнесов:", reply_markup=markup)
 
     elif call.data == "star_shop":
         bot.answer_callback_query(call.id)
@@ -213,116 +394,178 @@ def callback_handler(call):
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Инвестиции:", reply_markup=markup)
 
-    elif call.data == "casino_menu":
+    elif call.data == "inventory_menu":
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
-        markup.row(
-            InlineKeyboardButton("🎲 Бросить кости (500 монет)", callback_data="casino_dice"),
-            InlineKeyboardButton("🪙 Орёл и Решка (500 монет)", callback_data="casino_coin")
-        )
+        equipped_text = f"✨ Надето: **{user['equipped']}**" if user['equipped'] else "✨ Надето: **Ничего**"
+        if user["accessories"]:
+            text = f"🎒 **Инвентарь аксессуаров**\n\n{equipped_text}\n\nВыбери предмет:"
+            for idx, acc in enumerate(user["accessories"]):
+                prefix = "🟢 " if acc == user["equipped"] else ""
+                markup.row(InlineKeyboardButton(f"{prefix}{acc}", callback_data=f"equip_acc_{idx}"))
+        else:
+            text = f"🎒 **Инвентарь пуст**\n\n{equipped_text}"
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text="🎰 Добро пожаловать в Казино!\n\nМинимальная ставка: 500 монет.",
-            reply_markup=markup
-        )
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
 
-    elif call.data == "casino_dice":
-        bet = 500.0
-        if user["balance"] < bet:
-            bot.answer_callback_query(call.id, "Недостаточно монет для ставки (нужно 500)!", show_alert=True)
-            return
-        
-        user["balance"] -= bet
-        player_roll = random.randint(1, 6)
-        bot_roll = random.randint(1, 6)
-        
-        if player_roll > bot_roll:
-            win_amount = bet * 2
-            user["balance"] += win_amount
-            result_text = f"🎉 Ты победил!\nТвой бросок: {player_roll} | Дилер: {bot_roll}\nВыигрыш: +{win_amount} монет!"
-        elif player_roll < bot_roll:
-            result_text = f"😢 Ты проиграл...\nТвой бросок: {player_roll} | Дилер: {bot_roll}\nПотеряно: {bet} монет."
-        else:
-            user["balance"] += bet
-            result_text = f"🤝 Ничья!\nТвой бросок: {player_roll} | Дилер: {bot_roll}\nСтавка возвращена на баланс."
-            
-        save_user(chat_id, user)
-        bot.answer_callback_query(call.id)
-        
-        markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton("🎲 Сыграть еще раз", callback_data="casino_dice"))
-        markup.row(InlineKeyboardButton("🔙 В меню казино", callback_data="casino_menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=result_text, reply_markup=markup)
+    elif call.data.startswith("equip_acc_"):
+        try:
+            idx = int(call.data.replace("equip_acc_", ""))
+            if idx < len(user["accessories"]):
+                item_name = user["accessories"][idx]
+                user["equipped"] = "" if user["equipped"] == item_name else item_name
+                save_user(chat_id, user)
+                bot.answer_callback_query(call.id, "Успешно!", show_alert=True)
+                call.data = "inventory_menu"
+                callback_handler(call)
+        except:
+            pass
 
-    elif call.data == "casino_coin":
-        bet = 500.0
-        if user["balance"] < bet:
-            bot.answer_callback_query(call.id, "Недостаточно монет для ставки (нужно 500)!", show_alert=True)
-            return
-            
-        user["balance"] -= bet
-        outcome = random.choice(["Орёл", "Решка"])
-        won = random.choice([True, False])
-        
-        if won:
-            win_amount = bet * 2
-            user["balance"] += win_amount
-            result_text = f"🪙 Выпало: {outcome}!\n🎉 Удача на твоей стороне! Выигрыш: +{win_amount} монет!"
-        else:
-            result_text = f"🪙 Выпало: {outcome}!\n😢 К сожалению, ставка сгорела. Потеряно: {bet} монет."
-            
-        save_user(chat_id, user)
+    elif call.data == "auction_menu":
         bot.answer_callback_query(call.id)
-        
+        conn = sqlite3.connect("game.db", check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_name, current_price, highest_bidder_name, end_time FROM auction WHERE id = 1")
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            item_name, current_price, highest_bidder_name, end_time = row
+            time_left = max(0, end_time - int(time.time()))
+            hours, mins = time_left // 3600, (time_left % 3600) // 60
+            text = f"🎲 Аукцион\n\nЛот: **{item_name}**\nСтавка: **{current_price}**\nЛидер: **{highest_bidder_name}**\nОсталось: {hours}ч {mins}мин"
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton(f"💸 Поставить {current_price + 100}", callback_data="make_bid"))
+            markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
+
+    elif call.data == "make_bid":
+        conn = sqlite3.connect("game.db", check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_name, current_price, highest_bidder, end_time FROM auction WHERE id = 1")
+        row = cursor.fetchone()
+        if row:
+            item_name, current_price, highest_bidder, end_time = row
+            next_price = current_price + 100.0
+            if user["balance"] < next_price:
+                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
+                conn.close()
+                return
+            if highest_bidder > 0:
+                cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (current_price, highest_bidder))
+            user["balance"] -= next_price
+            save_user(chat_id, user)
+            user_name = call.from_user.first_name if call.from_user.first_name else "Игрок"
+            cursor.execute("UPDATE auction SET current_price = ?, highest_bidder = ?, highest_bidder_name = ? WHERE id = 1", (next_price, chat_id, user_name))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, "Ставка принята!", show_alert=True)
+            call.data = "auction_menu"
+            callback_handler(call)
+
+    elif call.data == "market_menu":
+        bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton("🪙 Крутить еще", callback_data="casino_coin"))
-        markup.row(InlineKeyboardButton("🔙 В меню казино", callback_data="casino_menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=result_text, reply_markup=markup)
+        markup.row(InlineKeyboardButton("🛒 Купить", callback_data="market_buy_list"), InlineKeyboardButton("📦 Продать", callback_data="market_sell_list"))
+        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🛒 Рынок P2P:", reply_markup=markup)
+
+    elif call.data == "market_buy_list":
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect("game.db", check_same_thread=False)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, seller_name, item_name, price FROM market")
+        lots = cursor.fetchall()
+        conn.close()
+        markup = InlineKeyboardMarkup()
+        if lots:
+            for lot in lots:
+                lot_id, seller_name, item_name, price = lot
+                markup.row(InlineKeyboardButton(f"{item_name} | {price} ({seller_name})", callback_data=f"buy_market_{lot_id}"))
+        markup.row(InlineKeyboardButton("🔙 Назад", callback_data="market_menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🛒 Доступные лоты:", reply_markup=markup)
+
+    elif call.data.startswith("buy_market_"):
+        try:
+            lot_id = int(call.data.replace("buy_market_", ""))
+            conn = sqlite3.connect("game.db", check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("SELECT seller_id, item_name, price FROM market WHERE id = ?", (lot_id,))
+            lot = cursor.fetchone()
+            if not lot or lot[0] == chat_id:
+                bot.answer_callback_query(call.id, "Невозможно купить!", show_alert=True)
+                conn.close()
+                return
+            seller_id, item_name, price = lot
+            if user["balance"] < price:
+                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
+                conn.close()
+                return
+            user["balance"] -= price
+            user["accessories"].append(item_name)
+            save_user(chat_id, user)
+            cursor.execute("UPDATE users SET balance = balance + ? WHERE chat_id = ?", (price, seller_id))
+            cursor.execute("DELETE FROM market WHERE id = ?", (lot_id,))
+            conn.commit()
+            conn.close()
+            bot.answer_callback_query(call.id, "Куплено!", show_alert=True)
+            call.data = "market_menu"
+            callback_handler(call)
+        except:
+            pass
+
+    elif call.data == "market_sell_list":
+        bot.answer_callback_query(call.id)
+        markup = InlineKeyboardMarkup()
+        if user["accessories"]:
+            for idx, acc in enumerate(user["accessories"]):
+                markup.row(InlineKeyboardButton(f"📦 Продать {acc}", callback_data=f"sell_acc_{idx}"))
+        markup.row(InlineKeyboardButton("🔙 Назад", callback_data="market_menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📦 Выберите предмет для продажи:", reply_markup=markup)
+
+    elif call.data.startswith("sell_acc_"):
+        try:
+            idx = int(call.data.replace("sell_acc_", ""))
+            if idx < len(user["accessories"]):
+                item_name = user["accessories"].pop(idx)
+                if user["equipped"] == item_name:
+                    user["equipped"] = ""
+                save_user(chat_id, user)
+                conn = sqlite3.connect("game.db", check_same_thread=False)
+                cursor = conn.cursor()
+                seller_name = call.from_user.first_name if call.from_user.first_name else "Игрок"
+                cursor.execute("INSERT INTO market (seller_id, seller_name, item_name, price) VALUES (?, ?, ?, ?)", (chat_id, seller_name, item_name, 500.0))
+                conn.commit()
+                conn.close()
+                bot.answer_callback_query(call.id, "Выставлено!", show_alert=True)
+                call.data = "market_menu"
+                callback_handler(call)
+        except:
+            pass
 
     elif call.data == "channels":
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
-        markup.row(InlineKeyboardButton("👉 Перейти в канал", url="https://t.me/top4ikeco"))
+        markup.row(InlineKeyboardButton("👉 Канал", url="https://t.me/top4ikeco"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=call.message.message_id,
-            text="📢 Перейдите в основной канал @top4ikeco, чтобы быть в курсе всех новостей и обновлений!",
-            reply_markup=markup
-        )
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📢 Канал проекта:", reply_markup=markup)
 
     elif call.data == "available_shop":
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
-        found = False
-        
-        for key, item in HOUSES.items():
+        for key, item in {**HOUSES, **INVESTMENTS}.items():
             if user["balance"] >= item["price"]:
-                markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/мин)", callback_data=f"buy_coin_{key}"))
-                found = True
-                
-        for key, item in INVESTMENTS.items():
-            if user["balance"] >= item["price"]:
-                markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/мин)", callback_data=f"buy_inv_{key}"))
-                found = True
-                
+                markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']}", callback_data=f"buy_coin_{key}" if key in HOUSES else f"buy_inv_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        
-        if found:
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🛍️ Доступно для покупки на твой баланс ({round(user['balance'], 2)} монет):", reply_markup=markup)
-        else:
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"😢 На балансе ({round(user['balance'], 2)} монет) пока недостаточно средств.", reply_markup=markup)
-        
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🛍️ Доступно для покупки:", reply_markup=markup)
+
     elif call.data == "quests_menu":
         bot.answer_callback_query(call.id)
         stage = user["quest_stage"]
         markup = InlineKeyboardMarkup()
         if stage in QUESTS:
             q = QUESTS[stage]
-            markup.row(InlineKeyboardButton(f"🎁 Забрать награду (+{q['reward']} монет)", callback_data="claim_quest"))
-            text = f"📜 Текущее задание:\n\n🔹 **{q['title']}**\n🏆 Награда: {q['reward']} монет"
+            markup.row(InlineKeyboardButton(f"🎁 Забрать награду (+{q['reward']})", callback_data="claim_quest"))
+            text = f"📜 Задание:\n\n🔹 **{q['title']}**"
         else:
             text = "📜 Все задания выполнены!"
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
@@ -330,110 +573,188 @@ def callback_handler(call):
 
     elif call.data == "claim_quest":
         stage = user["quest_stage"]
-        if stage in QUESTS:
+        if stage in QUESTS and QUESTS[stage]["target_prop"] in user["properties"]:
             q = QUESTS[stage]
-            if q["target_prop"] in user["properties"]:
-                user["balance"] += q["reward"]
-                user["quest_stage"] += 1
-                save_user(chat_id, user)
-                bot.answer_callback_query(call.id, f"Награда получена (+{q['reward']} монет)!", show_alert=True)
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🎉 Задание выполнено! Получено {q['reward']} монет.", reply_markup=main_menu_markup())
-            else:
-                bot.answer_callback_query(call.id, f"У тебя еще не куплено: {q['target_prop']}!", show_alert=True)
-        else:
-            bot.answer_callback_query(call.id, "Все задания уже выполнены!", show_alert=True)
-        
-    elif call.data == "hourly_bonus":
-        current_time = int(time.time())
-        last_b = int(user["last_bonus"] or 0)
-        cooldown = 3600
-        
-        if current_time - last_b >= cooldown:
-            user["balance"] += 3.0
-            user["last_bonus"] = current_time
+            user["balance"] += q["reward"]
+            user["quest_stage"] += 1
             save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Вы успешно получили 3 монеты!", show_alert=True)
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                text="⏰ Ежечасовой бонус успешно получен: +3 монеты на баланс!",
-                reply_markup=main_menu_markup()
-            )
+            bot.answer_callback_query(call.id, "Награда получена!", show_alert=True)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🎉 Задание выполнено!", reply_markup=main_menu_markup())
+
+    elif call.data == "hourly_bonus":
+        if time.time() - int(user["last_bonus"] or 0) >= 3600:
+            user["balance"] += 3.0
+            user["last_bonus"] = int(time.time())
+            save_user(chat_id, user)
+            bot.answer_callback_query(call.id, "+3 монеты!", show_alert=True)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="⏰ Бонус получен!", reply_markup=main_menu_markup())
         else:
-            time_left = cooldown - (current_time - last_b)
-            minutes_left = max(1, int(time_left // 60))
-            bot.answer_callback_query(call.id, f"Бонус будет доступен через {minutes_left} мин.", show_alert=True)
-        
-    elif call.data.startswith("buy_inv_"):
-        inv_key = call.data.replace("buy_inv_", "")
-        if inv_key in INVESTMENTS:
-            item = INVESTMENTS[inv_key]
-            if user["balance"] >= item["price"]:
-                user["balance"] -= item["price"]
-                user["investments"].append(item["name"])
-                save_user(chat_id, user)
-                bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Ты успешно купил инвестицию «{item['name']}»!", reply_markup=main_menu_markup())
-            else:
-                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
-            
-    elif call.data.startswith("buy_coin_"):
-        house_key = call.data.replace("buy_coin_", "")
-        if house_key in HOUSES:
-            item = HOUSES[house_key]
-            if user["balance"] >= item["price"]:
-                user["balance"] -= item["price"]
-                user["properties"].append(item["name"])
-                save_user(chat_id, user)
-                bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🎉 Поздравляем с покупкой: {item['name']}!", reply_markup=main_menu_markup())
-            else:
-                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
-            
-    elif call.data.startswith("buy_star_"):
-        house_key = call.data.replace("buy_star_", "")
-        if house_key in STAR_HOUSES:
-            item = STAR_HOUSES[house_key]
-            bot.answer_callback_query(call.id)
-            prices = [LabeledPrice(label=item['name'], amount=item['price'])]
-            bot.send_invoice(
-                chat_id=chat_id,
-                title=item['name'],
-                description=f"Купить премиум актив «{item['name']}» за Telegram Stars",
-                invoice_payload=f"buy_prop_{house_key}",
-                provider_token="",
-                currency="XTR",
-                prices=prices
-            )
-            
+            bot.answer_callback_query(call.id, "Рано для бонуса!", show_alert=True)
+
+    elif call.data.startswith("buy_inv_") or call.data.startswith("buy_coin_"):
+        is_inv = call.data.startswith("buy_inv_")
+        key = call.data.replace("buy_inv_" if is_inv else "buy_coin_", "")
+        item = INVESTMENTS.get(key) if is_inv else HOUSES.get(key)
+        if item and user["balance"] >= item["price"]:
+            user["balance"] -= item["price"]
+            (user["investments"] if is_inv else user["properties"]).append(item["name"])
+            save_user(chat_id, user)
+            bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="✅ Покупка завершена!", reply_markup=main_menu_markup())
+
     elif call.data == "my_props":
         bot.answer_callback_query(call.id)
         props = ", ".join(user["properties"]) if user["properties"] else "нет"
         invs = ", ".join(user["investments"]) if user["investments"] else "нет"
-        text = f"📂 Твое имущество:\n\n🌐 Бизнесы и Недвижимость:\n{props}\n\n📈 Инвестиции:\n{invs}"
+        text = f"📂 Имущество:\n\nБизнесы: {props}\n\nИнвестиции: {invs}"
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=main_menu_markup())
-            
+
     elif call.data == "menu":
         bot.answer_callback_query(call.id)
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="Главное меню:", reply_markup=main_menu_markup())
 
-@bot.pre_checkout_query_handler(func=lambda query: True)
-def checkout_handler(pre_checkout_query):
-    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+# --- ОБРАБОТКА ВВОДА ID И СТАВКИ ---
+def process_bj_challenge(message):
+    try:
+        parts = message.text.split(",")
+        p2_id = int(parts[0].strip())
+        bet = float(parts[1].strip())
+        p1_id = message.chat.id
+        
+        if p1_id == p2_id:
+            bot.send_message(p1_id, "❌ Нельзя играть против самого себя!")
+            return
+            
+        p1_data = get_user(p1_id)
+        if p1_data["balance"] < bet:
+            bot.send_message(p1_id, "❌ У вас недостаточно монет для такой ставки!")
+            return
+            
+        duel_id = f"{p1_id}_{p2_id}_{int(time.time())}"
+        ACTIVE_DUELS[duel_id] = {
+            "p1": p1_id,
+            "p2": p2_id,
+            "bet": bet,
+            "accepted": False
+        }
+        
+        # Отправляем инвайт сопернику
+        markup = InlineKeyboardMarkup()
+        markup.row(
+            InlineKeyboardButton("✅ Принять бой", callback_data=f"bj_accept_{p1_id}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"bj_decline_{p1_id}")
+        )
+        
+        p1_name = message.from_user.first_name if message.from_user.first_name else "Игрок"
+        bot.send_message(
+            p2_id, 
+            f"⚔️ **Вызов на дуэль в 21 очко!**\n\nИгрок **{p1_name}** вызывает вас на бой.\n💰 Ставка: **{bet} монет**.",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        bot.send_message(p1_id, "📤 Вызов успешно отправлен сопернику. Ожидайте ответа!")
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Неверный формат! Введите так: `ID, СТАВКА` (например: `123456789, 50`)", parse_mode="Markdown")
 
-@bot.message_handler(content_types=["successful_payment"])
-def got_payment(message):
-    payment = message.successful_payment
-    chat_id = message.chat.id
-    user = get_user(chat_id)
-    if payment.invoice_payload.startswith("buy_prop_"):
-        house_key = payment.invoice_payload.replace("buy_prop_", "")
-        if house_key in STAR_HOUSES:
-            item = STAR_HOUSES[house_key]
-            user["properties"].append(item["name"])
-            save_user(chat_id, user)
-            bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Премиум актив «{item['name']}» добавлен в твоё имущество и приносит {item['income']} монет в минуту!")
+# --- ЛОГИКА ИГРЫ В 21 ---
+def send_bj_table(duel_id):
+    duel = ACTIVE_DUELS[duel_id]
+    p1, p2 = duel["p1"], duel["p2"]
+    
+    p1_sum = sum(duel["p1_cards"])
+    p2_sum = sum(duel["p2_cards"])
+    
+    markup_p1 = InlineKeyboardMarkup()
+    markup_p1.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+    
+    markup_p2 = InlineKeyboardMarkup()
+    markup_p2.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+    
+    try:
+        bot.send_message(p1, f"🃏 **Дуэль 21**\n\nВаши карты: {duel['p1_cards']} (Сумма: **{p1_sum}**)\nКарты соперника: скрыты", reply_markup=markup_p1, parse_mode="Markdown")
+    except:
+        pass
+        
+    try:
+        bot.send_message(p2, f"🃏 **Дуэль 21**\n\nВаши карты: {duel['p2_cards']} (Сумма: **{p2_sum}**)\nКарты соперника: скрыты", reply_markup=markup_p2, parse_mode="Markdown")
+    except:
+        pass
+
+def check_bj_finish(duel_id):
+    duel = ACTIVE_DUELS[duel_id]
+    p1, p2 = duel["p1"], duel["p2"]
+    p1_sum = sum(duel["p1_cards"])
+    p2_sum = sum(duel["p2_cards"])
+    
+    p1_ended = duel["p1_stand"] or p1_sum > 21
+    p2_ended = duel["p2_stand"] or p2_sum > 21
+    
+    if p1_ended and p2_ended:
+        # Итоги
+        winner = None
+        text_res = f"🏁 **Итоги дуэли в 21!**\n\nВаши карты: {duel['p1_cards']} ({p1_sum})\nКарты соперника: {duel['p2_cards']} ({p2_sum})\n\n"
+        
+        # Логика определения победителя
+        if p1_sum > 21 and p2_sum > 21:
+            res_p1 = "Ничья (у обоих перебор). Ставки возвращены."
+            res_p2 = res_p1
+            get_user(p1)["balance"] += duel["bet"]
+            get_user(p2)["balance"] += duel["bet"]
+        elif p1_sum > 21:
+            res_p1 = "❌ У вас перебор! Вы проиграли."
+            res_p2 = "🎉 Соперник перебрал! Вы победили!"
+            winner = p2
+        elif p2_sum > 21:
+            res_p1 = "🎉 Соперник перебрал! Вы победили!"
+            res_p2 = "❌ У вас перебор! Вы проиграли."
+            winner = p1
+        elif p1_sum > p2_sum:
+            res_p1 = "🏆 Вы победили!"
+            res_p2 = "❌ Вы проиграли."
+            winner = p1
+        elif p2_sum > p1_sum:
+            res_p1 = "❌ Вы проиграли."
+            res_p2 = "🏆 Вы победили!"
+            winner = p2
+        else:
+            res_p1 = "🤝 Ничья! Ставки возвращены."
+            res_p2 = res_p1
+            get_user(p1)["balance"] += duel["bet"]
+            get_user(p2)["balance"] += duel["bet"]
+            
+        if winner:
+            w_data = get_user(winner)
+            w_data["balance"] += duel["bet"] * 2
+            save_user(winner, w_data)
+            
+        save_user(p1, get_user(p1))
+        save_user(p2, get_user(p2))
+        
+        try:
+            bot.send_message(p1, text_res + res_p1, reply_markup=main_menu_markup(), parse_mode="Markdown")
+        except:
+            pass
+        try:
+            bot.send_message(p2, text_res.replace(str(duel['p1_cards']), "скрыто").replace(str(p1_sum), "скрыто") + res_p2, reply_markup=main_menu_markup(), parse_mode="Markdown")
+        except:
+            pass
+            
+        del ACTIVE_DUELS[duel_id]
+    else:
+        # Обновляем состояние активному игроку
+        try:
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+            bot.send_message(p1, f"🃏 Обновление счета:\nВаши карты: {duel['p1_cards']} (Сумма: **{p1_sum}**)", reply_markup=markup if not duel["p1_stand"] else None, parse_mode="Markdown")
+        except:
+            pass
+        try:
+            markup = InlineKeyboardMarkup()
+            markup.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+            bot.send_message(p2, f"🃏 Обновление счета:\nВаши карты: {duel['p2_cards']} (Сумма: **{p2_sum}**)", reply_markup=markup if not duel["p2_stand"] else None, parse_mode="Markdown")
+        except:
+            pass
 
 if __name__ == "__main__":
-    print("Бот с минимальной ставкой 500 монет запущен...")
+    print("Бот запущен...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
