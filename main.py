@@ -27,7 +27,7 @@ def init_db():
             last_bonus INTEGER DEFAULT 0,
             quest_stage INTEGER DEFAULT 1,
             quest_claimed INTEGER DEFAULT 0,
-            total_earned REAL DEFAULT 0.0,
+            total_earned REAL DEFAULT 100.0,
             total_spent REAL DEFAULT 0.0
         )
     ''')
@@ -326,8 +326,21 @@ def callback_handler(call):
             user_data["total_spent"] += item["price"]
             (user_data["investments"] if is_inv else user_data["properties"]).append(item["name"])
             save_user(chat_id, user_data, -item["price"], f"Покупка: {item['name']}")
-            bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="✅ Покупка завершена!", reply_markup=main_menu_markup())
+            bot.answer_callback_query(call.id, f"Успешно куплено: {item['name']}!", show_alert=True)
+            
+            # Возвращаем пользователя обратно в соответствующий каталог, чтобы он видел обновление
+            if is_inv:
+                markup = InlineKeyboardMarkup()
+                for k, it in INVESTMENTS.items():
+                    markup.row(InlineKeyboardButton(f"{it['name']} — {it['price']} монет", callback_data=f"buy_inv_{k}"))
+                markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n📈 Инвестиции (20 вариантов):", reply_markup=markup, parse_mode="Markdown")
+            else:
+                markup = InlineKeyboardMarkup()
+                for k, it in HOUSES.items():
+                    markup.row(InlineKeyboardButton(f"{it['name']} — {it['price']} монет", callback_data=f"buy_coin_{k}"))
+                markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n🏪 Магазин бизнесов (20 уровней):", reply_markup=markup, parse_mode="Markdown")
         else:
             bot.answer_callback_query(call.id, "Недостаточно средств!", show_alert=True)
 
@@ -453,7 +466,7 @@ def got_payment(message):
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=income_loop, daemon=True).start()
-    logging.info("Бот с 100 монетами на старте запущен.")
+    logging.info("Бот с полноценными покупками, списанием баланса и начислением доходов запущен.")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)
