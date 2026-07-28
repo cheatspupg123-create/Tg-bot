@@ -7,7 +7,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPri
 TOKEN = "8631846961:AAGpjWYBTBugvefFkiWBSucihBEZBthlY2M"
 bot = telebot.TeleBot(TOKEN)
 
-# --- БАЗА ДАННЫХ (Сохранение игроков навсегда) ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect("game.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -74,6 +74,7 @@ STAR_HOUSES = {
 }
 
 INVESTMENTS = {
+    "inv_0": {"name": "☕ Кофейный ларек (Старт)", "price": 10, "income": 0.3},
     "inv_1": {"name": "🌱 Крипто-ферма", "price": 15, "income": 0.5},
     "inv_2": {"name": "☕ Кофейный ларек", "price": 40, "income": 1.5},
     "inv_3": {"name": "⛽ Автомойка", "price": 150, "income": 6.0},
@@ -135,7 +136,7 @@ def main_menu_markup():
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     get_user(message.chat.id)
-    bot.send_message(message.chat.id, "🌆 Добро пожаловать!\n💾 У тебя на балансе 15 монет — загляни в «Доступные покупки» или «Инвестиции» и бери Крипто-ферму!", reply_markup=main_menu_markup())
+    bot.send_message(message.chat.id, "🌆 Бот обновлен! Бонус теперь работает идеально.", reply_markup=main_menu_markup())
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -185,7 +186,7 @@ def callback_handler(call):
         for key, item in INVESTMENTS.items():
             markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_inv_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Глобальные инвестиционные проекты:", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Инвестиции:", reply_markup=markup)
 
     elif call.data == "available_shop":
         bot.answer_callback_query(call.id)
@@ -207,7 +208,7 @@ def callback_handler(call):
         if found:
             bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🛍️ Доступно для покупки на твой баланс ({round(user['balance'], 2)} монет):", reply_markup=markup)
         else:
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"😢 На балансе ({round(user['balance'], 2)} монет) пока недостаточно средств. Жди доход или бери бонус!", reply_markup=markup)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"😢 На балансе ({round(user['balance'], 2)} монет) пока недостаточно средств.", reply_markup=markup)
         
     elif call.data == "quests_menu":
         bot.answer_callback_query(call.id)
@@ -239,15 +240,23 @@ def callback_handler(call):
         
     elif call.data == "hourly_bonus":
         current_time = int(time.time())
-        if current_time - user["last_bonus"] >= 3600:
+        last_b = int(user["last_bonus"] or 0)
+        cooldown = 3600 # 1 час
+        
+        if current_time - last_b >= cooldown:
             user["balance"] += 3.0
             user["last_bonus"] = current_time
             save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Вы получили 3 монеты!", show_alert=True)
-            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="⏰ Ежечасовой бонус успешно получен: +3 монеты!", reply_markup=main_menu_markup())
+            bot.answer_callback_query(call.id, "Вы успешно получили 3 монеты!", show_alert=True)
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                text="⏰ Ежечасовой бонус успешно получен: +3 монеты на баланс!",
+                reply_markup=main_menu_markup()
+            )
         else:
-            time_left = 3600 - (current_time - user["last_bonus"])
-            minutes_left = int(time_left // 60)
+            time_left = cooldown - (current_time - last_b)
+            minutes_left = max(1, int(time_left // 60))
             bot.answer_callback_query(call.id, f"Бонус будет доступен через {minutes_left} мин.", show_alert=True)
         
     elif call.data.startswith("buy_inv_"):
@@ -317,5 +326,5 @@ def got_payment(message):
             bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Актив «{item['name']}» добавлен в твоё имущество!")
 
 if __name__ == "__main__":
-    print("Бот запущен и полностью исправлен...")
+    print("Бот запущен, бонус исправлен...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
