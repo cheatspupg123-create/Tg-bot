@@ -54,7 +54,7 @@ def save_user(chat_id, user_data):
     conn.commit()
     conn.close()
 
-# --- МАСШТАБНЫЙ КАТАЛОГ БИЗНЕСОВ И СЕТЕЙ ---
+# --- КАТАЛОГИ ---
 HOUSES = {
     "house_1": {"name": "🏠 Гараж", "price": 50, "income": 1.0},
     "house_2": {"name": "🏢 Офис", "price": 200, "income": 4.0},
@@ -89,7 +89,7 @@ QUESTS = {
     3: {"title": "Крупный шаг: приобрети Завод", "target_prop": "🏭 Завод", "reward": 20.0}
 }
 
-# Фоновый поток начислений
+# Фоновый поток начислений дохода
 def income_loop():
     while True:
         time.sleep(1)
@@ -135,7 +135,7 @@ def main_menu_markup():
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     get_user(message.chat.id)
-    bot.send_message(message.chat.id, "🌆 Добро пожаловать в мега-симулятор магната!\n💾 Твой баланс 15 монет — загляни в «Доступные покупки» или «Инвестиции»!\n\nВыбирай разделы ниже:", reply_markup=main_menu_markup())
+    bot.send_message(message.chat.id, "🌆 Добро пожаловать!\n💾 У тебя на балансе 15 монет — загляни в «Доступные покупки» или «Инвестиции» и бери Крипто-ферму!", reply_markup=main_menu_markup())
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -144,7 +144,12 @@ def callback_handler(call):
     
     if call.data == "balance":
         bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, f"💰 Твой баланс: {round(user['balance'], 2)} монет", reply_markup=main_menu_markup())
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text=f"💰 Твой баланс: {round(user['balance'], 2)} монет",
+            reply_markup=main_menu_markup()
+        )
         
     elif call.data == "income_info":
         bot.answer_callback_query(call.id)
@@ -157,7 +162,12 @@ def callback_handler(call):
             for item in INVESTMENTS.values():
                 if item["name"] == inv:
                     total_income += item["income"]
-        bot.send_message(chat_id, f"📊 Твой общий пассивный доход: {round(total_income, 2)} монет в секунду", reply_markup=main_menu_markup())
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text=f"📊 Твой общий пассивный доход: {round(total_income, 2)} монет в секунду",
+            reply_markup=main_menu_markup()
+        )
         
     elif call.data == "shop":
         bot.answer_callback_query(call.id)
@@ -167,7 +177,7 @@ def callback_handler(call):
         for key, item in STAR_HOUSES.items():
             markup.row(InlineKeyboardButton(f"{item['name']} — ⭐ {item['price']} Звёзд (+{item['income']}/с)", callback_data=f"buy_star_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, "🏪 Магазин сетей и недвижимости:", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🏪 Магазин сетей и недвижимости:", reply_markup=markup)
         
     elif call.data == "invest_menu":
         bot.answer_callback_query(call.id)
@@ -175,20 +185,18 @@ def callback_handler(call):
         for key, item in INVESTMENTS.items():
             markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_inv_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, "📈 Глобальные инвестиционные проекты:", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Глобальные инвестиционные проекты:", reply_markup=markup)
 
     elif call.data == "available_shop":
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
         found = False
         
-        # Проверяем монетизированные бизнесы (HOUSES)
         for key, item in HOUSES.items():
             if user["balance"] >= item["price"]:
                 markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_coin_{key}"))
                 found = True
                 
-        # Проверяем инвестиции (INVESTMENTS)
         for key, item in INVESTMENTS.items():
             if user["balance"] >= item["price"]:
                 markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_inv_{key}"))
@@ -197,9 +205,9 @@ def callback_handler(call):
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
         
         if found:
-            bot.send_message(chat_id, f"🛍️ Доступно для покупки на ваш баланс ({round(user['balance'], 2)} монет):", reply_markup=markup)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🛍️ Доступно для покупки на твой баланс ({round(user['balance'], 2)} монет):", reply_markup=markup)
         else:
-            bot.send_message(chat_id, f"😢 На вашем балансе ({round(user['balance'], 2)} монет) пока недостаточно средств ни для одной покупки. Подождите накопления дохода или получите бонус!", reply_markup=markup)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"😢 На балансе ({round(user['balance'], 2)} монет) пока недостаточно средств. Жди доход или бери бонус!", reply_markup=markup)
         
     elif call.data == "quests_menu":
         bot.answer_callback_query(call.id)
@@ -210,9 +218,9 @@ def callback_handler(call):
             markup.row(InlineKeyboardButton(f"🎁 Забрать награду (+{q['reward']} монет)", callback_data="claim_quest"))
             text = f"📜 Текущее задание:\n\n🔹 **{q['title']}**\n🏆 Награда: {q['reward']} монет"
         else:
-            text = "📜 Вы прошли все доступные задания! Ожидайте новых обновлений."
+            text = "📜 Все задания выполнены!"
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "claim_quest":
         stage = user["quest_stage"]
@@ -223,9 +231,9 @@ def callback_handler(call):
                 user["quest_stage"] += 1
                 save_user(chat_id, user)
                 bot.answer_callback_query(call.id, f"Награда получена (+{q['reward']} монет)!", show_alert=True)
-                bot.send_message(chat_id, f"🎉 Задание выполнено! Вы получили {q['reward']} монет.", reply_markup=main_menu_markup())
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🎉 Задание выполнено! Получено {q['reward']} монет.", reply_markup=main_menu_markup())
             else:
-                bot.answer_callback_query(call.id, f"У вас еще не куплено: {q['target_prop']}!", show_alert=True)
+                bot.answer_callback_query(call.id, f"У тебя еще не куплено: {q['target_prop']}!", show_alert=True)
         else:
             bot.answer_callback_query(call.id, "Все задания уже выполнены!", show_alert=True)
         
@@ -236,7 +244,7 @@ def callback_handler(call):
             user["last_bonus"] = current_time
             save_user(chat_id, user)
             bot.answer_callback_query(call.id, "Вы получили 3 монеты!", show_alert=True)
-            bot.send_message(chat_id, "⏰ Ежечасовой бонус успешно получен: +3 монеты!", reply_markup=main_menu_markup())
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="⏰ Ежечасовой бонус успешно получен: +3 монеты!", reply_markup=main_menu_markup())
         else:
             time_left = 3600 - (current_time - user["last_bonus"])
             minutes_left = int(time_left // 60)
@@ -244,362 +252,56 @@ def callback_handler(call):
         
     elif call.data.startswith("buy_inv_"):
         inv_key = call.data.replace("buy_inv_", "")
-        item = INVESTMENTS[inv_key]
-        if user["balance"] >= item["price"]:
-            user["balance"] -= item["price"]
-            user["investments"].append(item["name"])
-            save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Куплено!")
-            bot.send_message(chat_id, f"✅ Ты успешно профинансировал «{item['name']}»!", reply_markup=main_menu_markup())
-        else:
-            bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
-            
-    elif call.data.startswith("buy_coin_"):
-        house_key = call.data.replace("buy_coin_", "")
-        item = HOUSES[house_key]
-        if user["balance"] >= item["price"]:
-            user["balance"] -= item["price"]
-            user["properties"].append(item["name"])
-            save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Успешно куплено!")
-            bot.send_message(chat_id, f"🎉 Поздравляем с покупкой сети: {item['name']}!", reply_markup=main_menu_markup())
-        else:
-            bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
-            
-    elif call.data.startswith("buy_star_"):
-        house_key = call.data.replace("buy_star_", "")
-        item = STAR_HOUSES[house_key]
-        bot.answer_callback_query(call.id)
-        prices = [LabeledPrice(label=item['name'], amount=item['price'])]
-        bot.send_invoice(
-            chat_id=chat_id,
-            title=item['name'],
-            description=f"Купить '{item['name']}' за Телеграм Звёзды",
-            invoice_payload=f"buy_prop_{house_key}",
-            provider_token="",
-            currency="XTR",
-            prices=prices
-        )
-            
-    elif call.data == "my_props":
-        bot.answer_callback_query(call.id)
-        props = ", ".join(user["properties"]) if user["properties"] else "нет"
-        invs = ", ".join(user["investments"]) if user["investments"] else "нет"
-        text = f"📂 Твое имущество:\n\n🌐 Сети и недвижимость:\n{props}\n\n📈 Инвестиции:\n{invs}"
-        bot.send_message(chat_id, text, reply_markup=main_menu_markup())
-            
-    elif call.data == "menu":
-        bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, "Главное меню:", reply_markup=main_menu_markup())
-
-@bot.message_handler(content_types=["successful_payment"])
-def got_payment(message):
-    payment = message.successful_payment
-    chat_id = message.chat.id
-    user = get_user(chat_id)
-    if payment.invoice_payload.startswith("buy_prop_"):
-        house_key = payment.invoice_payload.replace("buy_prop_", "")
-        item = STAR_HOUSES[house_key]
-        user["properties"].append(item["name"])
-        save_user(chat_id, user)
-        bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Эксклюзивный актив «{item['name']}» навсегда добавлен в твоё имущество!")
-
-if __name__ == "__main__":
-    print("Бот с фильтром доступных покупок запущен...")
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
-import time
-import threading
-import sqlite3
-import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
-
-TOKEN = "8631846961:AAGpjWYBTBugvefFkiWBSucihBEZBthlY2M"
-bot = telebot.TeleBot(TOKEN)
-
-# --- БАЗА ДАННЫХ (Сохранение игроков навсегда) ---
-def init_db():
-    conn = sqlite3.connect("game.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            chat_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 15.0,
-            properties TEXT DEFAULT "",
-            investments TEXT DEFAULT "",
-            last_bonus INTEGER DEFAULT 0,
-            quest_stage INTEGER DEFAULT 1,
-            quest_claimed INTEGER DEFAULT 0
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def get_user(chat_id):
-    conn = sqlite3.connect("game.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance, properties, investments, last_bonus, quest_stage, quest_claimed FROM users WHERE chat_id = ?", (chat_id,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.execute("INSERT INTO users (chat_id, balance, properties, investments, last_bonus, quest_stage, quest_claimed) VALUES (?, ?, ?, ?, ?, ?, ?)", 
-                       (chat_id, 15.0, "", "", 0, 1, 0))
-        conn.commit()
-        user_data = {"balance": 15.0, "properties": [], "investments": [], "last_bonus": 0, "quest_stage": 1, "quest_claimed": 0}
-    else:
-        props = row[1].split(",") if row[1] else []
-        invs = row[2].split(",") if row[2] else []
-        user_data = {"balance": row[0], "properties": props, "investments": invs, "last_bonus": row[3], "quest_stage": row[4], "quest_claimed": row[5]}
-    conn.close()
-    return user_data
-
-def save_user(chat_id, user_data):
-    conn = sqlite3.connect("game.db", check_same_thread=False)
-    cursor = conn.cursor()
-    props_str = ",".join(user_data["properties"])
-    invs_str = ",".join(user_data["investments"])
-    cursor.execute("UPDATE users SET balance = ?, properties = ?, investments = ?, last_bonus = ?, quest_stage = ?, quest_claimed = ? WHERE chat_id = ?",
-                   (user_data["balance"], props_str, invs_str, user_data["last_bonus"], user_data["quest_stage"], user_data["quest_claimed"], chat_id))
-    conn.commit()
-    conn.close()
-
-# --- МАСШТАБНЫЙ КАТАЛОГ БИЗНЕСОВ И СЕТЕЙ ---
-HOUSES = {
-    "house_1": {"name": "🏠 Гараж", "price": 50, "income": 1.0},
-    "house_2": {"name": "🏢 Офис", "price": 200, "income": 4.0},
-    "house_3": {"name": "🏭 Завод", "price": 800, "income": 15.0},
-    "house_4": {"name": "🏙️ Торговый центр", "price": 3000, "income": 50.0},
-    "house_5": {"name": "🌐 Сеть автозаправок (АЗС)", "price": 12000, "income": 180.0},
-    "house_6": {"name": "🏨 Сеть отелей", "price": 45000, "income": 650.0},
-    "house_7": {"name": "⚡ Электростанция", "price": 150000, "income": 2200.0}
-}
-
-STAR_HOUSES = {
-    "star_cafe": {"name": "☕ Частная кофейня", "price": 10, "income": 30.0},
-    "star_1": {"name": "💎 IT-Корпорация", "price": 35, "income": 100.0},
-    "star_2": {"name": "🚀 Космопорт", "price": 100, "income": 350.0},
-    "star_3": {"name": "🛰️ Спутниковая связь", "price": 300, "income": 1200.0},
-    "star_4": {"name": "🌌 Межгалактический Банк", "price": 1000, "income": 5000.0}
-}
-
-INVESTMENTS = {
-    "inv_1": {"name": "🌱 Крипто-ферма", "price": 15, "income": 0.5},
-    "inv_2": {"name": "☕ Кофейный ларек", "price": 40, "income": 1.5},
-    "inv_3": {"name": "⛽ Автомойка", "price": 150, "income": 6.0},
-    "inv_4": {"name": "🚢 Логистическая компания", "price": 600, "income": 25.0},
-    "inv_5": {"name": "✈️ Авиалинии", "price": 2500, "income": 100.0},
-    "inv_6": {"name": "🎬 Киностудия", "price": 10000, "income": 400.0},
-    "inv_7": {"name": "🧬 Биотех-лаборатория", "price": 40000, "income": 1600.0}
-}
-
-QUESTS = {
-    1: {"title": "Купи свой первый бизнес (Гараж)", "target_prop": "🏠 Гараж", "reward": 10.0},
-    2: {"title": "Расширяйся: купи Офис", "target_prop": "🏢 Офис", "reward": 15.0},
-    3: {"title": "Крупный шаг: приобрети Завод", "target_prop": "🏭 Завод", "reward": 20.0}
-}
-
-# Фоновый поток начислений
-def income_loop():
-    while True:
-        time.sleep(1)
-        conn = sqlite3.connect("game.db", check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id, balance, properties, investments FROM users")
-        rows = cursor.fetchall()
-        
-        for row in rows:
-            chat_id = row[0]
-            balance = row[1]
-            props = row[2].split(",") if row[2] else []
-            invs = row[3].split(",") if row[3] else []
-            
-            total_income = 0.0
-            for p in props:
-                for item in {**HOUSES, **STAR_HOUSES}.values():
-                    if item["name"] == p:
-                        total_income += item["income"]
-            for inv in invs:
-                for item in INVESTMENTS.values():
-                    if item["name"] == inv:
-                        total_income += item["income"]
-            
-            if total_income > 0:
-                new_balance = balance + total_income
-                cursor.execute("UPDATE users SET balance = ? WHERE chat_id = ?", (new_balance, chat_id))
-        
-        conn.commit()
-        conn.close()
-
-threading.Thread(target=income_loop, daemon=True).start()
-
-def main_menu_markup():
-    markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("💰 Баланс", callback_data="balance"), InlineKeyboardButton("📊 Доход", callback_data="income_info"))
-    markup.row(InlineKeyboardButton("🏢 Сети & Бизнесы", callback_data="shop"), InlineKeyboardButton("📈 Инвестиции", callback_data="invest_menu"))
-    markup.row(InlineKeyboardButton("🛍️ Доступные покупки", callback_data="available_shop"))
-    markup.row(InlineKeyboardButton("📂 Мое имущество", callback_data="my_props"), InlineKeyboardButton("📜 Задания", callback_data="quests_menu"))
-    markup.row(InlineKeyboardButton("⏰ Бонус (3 монеты)", callback_data="hourly_bonus"))
-    return markup
-
-@bot.message_handler(commands=["start"])
-def send_welcome(message):
-    get_user(message.chat.id)
-    bot.send_message(message.chat.id, "🌆 Добро пожаловать в мега-симулятор магната!\n💾 Твой баланс 15 монет — загляни в «Доступные покупки» или «Инвестиции»!\n\nВыбирай разделы ниже:", reply_markup=main_menu_markup())
-
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    chat_id = call.message.chat.id
-    user = get_user(chat_id)
-    
-    if call.data == "balance":
-        bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, f"💰 Твой баланс: {round(user['balance'], 2)} монет", reply_markup=main_menu_markup())
-        
-    elif call.data == "income_info":
-        bot.answer_callback_query(call.id)
-        total_income = 0.0
-        for p in user["properties"]:
-            for item in {**HOUSES, **STAR_HOUSES}.values():
-                if item["name"] == p:
-                    total_income += item["income"]
-        for inv in user["investments"]:
-            for item in INVESTMENTS.values():
-                if item["name"] == inv:
-                    total_income += item["income"]
-        bot.send_message(chat_id, f"📊 Твой общий пассивный доход: {round(total_income, 2)} монет в секунду", reply_markup=main_menu_markup())
-        
-    elif call.data == "shop":
-        bot.answer_callback_query(call.id)
-        markup = InlineKeyboardMarkup()
-        for key, item in HOUSES.items():
-            markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_coin_{key}"))
-        for key, item in STAR_HOUSES.items():
-            markup.row(InlineKeyboardButton(f"{item['name']} — ⭐ {item['price']} Звёзд (+{item['income']}/с)", callback_data=f"buy_star_{key}"))
-        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, "🏪 Магазин сетей и недвижимости:", reply_markup=markup)
-        
-    elif call.data == "invest_menu":
-        bot.answer_callback_query(call.id)
-        markup = InlineKeyboardMarkup()
-        for key, item in INVESTMENTS.items():
-            markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_inv_{key}"))
-        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, "📈 Глобальные инвестиционные проекты:", reply_markup=markup)
-
-    elif call.data == "available_shop":
-        bot.answer_callback_query(call.id)
-        markup = InlineKeyboardMarkup()
-        found = False
-        
-        # Проверяем монетизированные бизнесы (HOUSES)
-        for key, item in HOUSES.items():
+        if inv_key in INVESTMENTS:
+            item = INVESTMENTS[inv_key]
             if user["balance"] >= item["price"]:
-                markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_coin_{key}"))
-                found = True
-                
-        # Проверяем инвестиции (INVESTMENTS)
-        for key, item in INVESTMENTS.items():
-            if user["balance"] >= item["price"]:
-                markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет (+{item['income']}/с)", callback_data=f"buy_inv_{key}"))
-                found = True
-                
-        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        
-        if found:
-            bot.send_message(chat_id, f"🛍️ Доступно для покупки на ваш баланс ({round(user['balance'], 2)} монет):", reply_markup=markup)
-        else:
-            bot.send_message(chat_id, f"😢 На вашем балансе ({round(user['balance'], 2)} монет) пока недостаточно средств ни для одной покупки. Подождите накопления дохода или получите бонус!", reply_markup=markup)
-        
-    elif call.data == "quests_menu":
-        bot.answer_callback_query(call.id)
-        stage = user["quest_stage"]
-        markup = InlineKeyboardMarkup()
-        if stage in QUESTS:
-            q = QUESTS[stage]
-            markup.row(InlineKeyboardButton(f"🎁 Забрать награду (+{q['reward']} монет)", callback_data="claim_quest"))
-            text = f"📜 Текущее задание:\n\n🔹 **{q['title']}**\n🏆 Награда: {q['reward']} монет"
-        else:
-            text = "📜 Вы прошли все доступные задания! Ожидайте новых обновлений."
-        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
-
-    elif call.data == "claim_quest":
-        stage = user["quest_stage"]
-        if stage in QUESTS:
-            q = QUESTS[stage]
-            if q["target_prop"] in user["properties"]:
-                user["balance"] += q["reward"]
-                user["quest_stage"] += 1
+                user["balance"] -= item["price"]
+                user["investments"].append(item["name"])
                 save_user(chat_id, user)
-                bot.answer_callback_query(call.id, f"Награда получена (+{q['reward']} монет)!", show_alert=True)
-                bot.send_message(chat_id, f"🎉 Задание выполнено! Вы получили {q['reward']} монет.", reply_markup=main_menu_markup())
+                bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Ты успешно купил «{item['name']}»!", reply_markup=main_menu_markup())
             else:
-                bot.answer_callback_query(call.id, f"У вас еще не куплено: {q['target_prop']}!", show_alert=True)
-        else:
-            bot.answer_callback_query(call.id, "Все задания уже выполнены!", show_alert=True)
-        
-    elif call.data == "hourly_bonus":
-        current_time = int(time.time())
-        if current_time - user["last_bonus"] >= 3600:
-            user["balance"] += 3.0
-            user["last_bonus"] = current_time
-            save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Вы получили 3 монеты!", show_alert=True)
-            bot.send_message(chat_id, "⏰ Ежечасовой бонус успешно получен: +3 монеты!", reply_markup=main_menu_markup())
-        else:
-            time_left = 3600 - (current_time - user["last_bonus"])
-            minutes_left = int(time_left // 60)
-            bot.answer_callback_query(call.id, f"Бонус будет доступен через {minutes_left} мин.", show_alert=True)
-        
-    elif call.data.startswith("buy_inv_"):
-        inv_key = call.data.replace("buy_inv_", "")
-        item = INVESTMENTS[inv_key]
-        if user["balance"] >= item["price"]:
-            user["balance"] -= item["price"]
-            user["investments"].append(item["name"])
-            save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Куплено!")
-            bot.send_message(chat_id, f"✅ Ты успешно профинансировал «{item['name']}»!", reply_markup=main_menu_markup())
-        else:
-            bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
+                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
             
     elif call.data.startswith("buy_coin_"):
         house_key = call.data.replace("buy_coin_", "")
-        item = HOUSES[house_key]
-        if user["balance"] >= item["price"]:
-            user["balance"] -= item["price"]
-            user["properties"].append(item["name"])
-            save_user(chat_id, user)
-            bot.answer_callback_query(call.id, "Успешно куплено!")
-            bot.send_message(chat_id, f"🎉 Поздравляем с покупкой сети: {item['name']}!", reply_markup=main_menu_markup())
-        else:
-            bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
+        if house_key in HOUSES:
+            item = HOUSES[house_key]
+            if user["balance"] >= item["price"]:
+                user["balance"] -= item["price"]
+                user["properties"].append(item["name"])
+                save_user(chat_id, user)
+                bot.answer_callback_query(call.id, "Успешно куплено!", show_alert=True)
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"🎉 Поздравляем с покупкой: {item['name']}!", reply_markup=main_menu_markup())
+            else:
+                bot.answer_callback_query(call.id, "Недостаточно монет!", show_alert=True)
             
     elif call.data.startswith("buy_star_"):
         house_key = call.data.replace("buy_star_", "")
-        item = STAR_HOUSES[house_key]
-        bot.answer_callback_query(call.id)
-        prices = [LabeledPrice(label=item['name'], amount=item['price'])]
-        bot.send_invoice(
-            chat_id=chat_id,
-            title=item['name'],
-            description=f"Купить '{item['name']}' за Телеграм Звёзды",
-            invoice_payload=f"buy_prop_{house_key}",
-            provider_token="",
-            currency="XTR",
-            prices=prices
-        )
+        if house_key in STAR_HOUSES:
+            item = STAR_HOUSES[house_key]
+            bot.answer_callback_query(call.id)
+            prices = [LabeledPrice(label=item['name'], amount=item['price'])]
+            bot.send_invoice(
+                chat_id=chat_id,
+                title=item['name'],
+                description=f"Купить '{item['name']}' за Телеграм Звёзды",
+                invoice_payload=f"buy_prop_{house_key}",
+                provider_token="",
+                currency="XTR",
+                prices=prices
+            )
             
     elif call.data == "my_props":
         bot.answer_callback_query(call.id)
         props = ", ".join(user["properties"]) if user["properties"] else "нет"
         invs = ", ".join(user["investments"]) if user["investments"] else "нет"
         text = f"📂 Твое имущество:\n\n🌐 Сети и недвижимость:\n{props}\n\n📈 Инвестиции:\n{invs}"
-        bot.send_message(chat_id, text, reply_markup=main_menu_markup())
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=main_menu_markup())
             
     elif call.data == "menu":
         bot.answer_callback_query(call.id)
-        bot.send_message(chat_id, "Главное меню:", reply_markup=main_menu_markup())
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="Главное меню:", reply_markup=main_menu_markup())
 
 @bot.message_handler(content_types=["successful_payment"])
 def got_payment(message):
@@ -608,11 +310,12 @@ def got_payment(message):
     user = get_user(chat_id)
     if payment.invoice_payload.startswith("buy_prop_"):
         house_key = payment.invoice_payload.replace("buy_prop_", "")
-        item = STAR_HOUSES[house_key]
-        user["properties"].append(item["name"])
-        save_user(chat_id, user)
-        bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Эксклюзивный актив «{item['name']}» навсегда добавлен в твоё имущество!")
+        if house_key in STAR_HOUSES:
+            item = STAR_HOUSES[house_key]
+            user["properties"].append(item["name"])
+            save_user(chat_id, user)
+            bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Актив «{item['name']}» добавлен в твоё имущество!")
 
 if __name__ == "__main__":
-    print("Бот с фильтром доступных покупок запущен...")
+    print("Бот запущен и полностью исправлен...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
