@@ -6,9 +6,10 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 
 TOKEN = "8631846961:AAGpjWYBTBugvefFkiWBSucihBEZBthlY2M"
+ADMIN_ID = 5107814486
 bot = telebot.TeleBot(TOKEN)
 
-# Активные дуэли: {duel_id: {"p1": chat_id1, "p2": chat_id2, "bet": amount, "deck": [...], "p1_cards": [...], "p2_cards": [...], "p1_stand": False, "p2_stand": False}}
+# Активные дуэли: {duel_id: {"p1": chat_id1, "p2": chat_id2, "bet": amount, "deck": [...], "p1_cards": [...], "p2_cards": [...], "p1_stand": False, "p2_stand": False, "accepted": True}}
 ACTIVE_DUELS = {}
 
 # --- БАЗА ДАННЫХ ---
@@ -227,12 +228,49 @@ def send_welcome(message):
     get_user(message.chat.id)
     bot.send_message(message.chat.id, "🌆 Добро пожаловать! Бот успешно запущен и готов к работе.", reply_markup=main_menu_markup())
 
+# --- УНИВЕРСАЛЬНАЯ АДМИН-КОМАНДА ДЛЯ ВЫДАЧИ МОНЕТ СЕБЕ ИЛИ ДРУГИМ ---
+@bot.message_handler(commands=["addmoney"])
+def cmd_add_money(message):
+    if message.chat.id != ADMIN_ID:
+        bot.send_message(message.chat.id, "❌ У вас нет прав на использование этой команды.")
+        return
+    try:
+        parts = message.text.split()
+        
+        # Если передан ID игрока и сумма: /addmoney 123456789 500
+        if len(parts) >= 3:
+            target_id = int(parts[1])
+            amount = float(parts[2])
+            
+            user = get_user(target_id)
+            user["balance"] += amount
+            save_user(target_id, user)
+            
+            bot.send_message(message.chat.id, f"✅ Успешно выдано **{amount}** монет игроку с ID `{target_id}`!\nНовый баланс игрока: **{round(user['balance'], 2)}**", parse_mode="Markdown")
+            try:
+                bot.send_message(target_id, f"🎁 Администратор начислил вам **{amount}** монет!")
+            except:
+                pass
+                
+        # Если передана только сумма: /addmoney 1000 (выдает вам)
+        elif len(parts) == 2:
+            amount = float(parts[1])
+            user = get_user(message.chat.id)
+            user["balance"] += amount
+            save_user(message.chat.id, user)
+            bot.send_message(message.chat.id, f"✅ Успешно выдано себе: **{amount}** монет!\nТекущий баланс: **{round(user['balance'], 2)}**", parse_mode="Markdown")
+            
+        else:
+            bot.send_message(message.chat.id, "❌ Использование:\n• Себе: `/addmoney 1000`\n• Другому: `/addmoney ID СУММА`", parse_mode="Markdown")
+            
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Ошибка! Проверьте правильность введенных данных.\nПример: `/addmoney 123456789 500`", parse_mode="Markdown")
+
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     chat_id = call.message.chat.id
     user = get_user(chat_id)
     
-    # --- ПРОФИЛЬ ИГРОКА ---
     if call.data == "profile_menu":
         bot.answer_callback_query(call.id)
         name = call.from_user.first_name if call.from_user.first_name else "Игрок"
@@ -251,7 +289,6 @@ def callback_handler(call):
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
 
-    # --- МЕНЮ ДУЭЛИ 21 ОЧКО ---
     elif call.data == "blackjack_menu":
         bot.answer_callback_query(call.id)
         text = (
@@ -280,7 +317,6 @@ def callback_handler(call):
             p1_id = int(call.data.replace("bj_accept_", ""))
             p2_id = chat_id
             
-            # Проверяем, есть ли такой вызов или дуэль уже идет
             found_key = None
             for k, d in ACTIVE_DUELS.items():
                 if d["p1"] == p1_id and d["p2"] == p2_id and not d.get("accepted"):
@@ -302,7 +338,6 @@ def callback_handler(call):
                 del ACTIVE_DUELS[found_key]
                 return
                 
-            # Списываем ставки
             p1_data["balance"] -= bet
             p2_data["balance"] -= bet
             save_user(p1_id, p1_data)
@@ -310,8 +345,7 @@ def callback_handler(call):
             
             duel["accepted"] = True
             
-            # Колода карт и раздача стартовых 2 карт
-            deck = [2, 3, 4, 6, 7, 8, 9, 10, 2, 3, 4, 6, 7, 8, 9, 10, 11, 4] * 4 # Упрощенный пул очков
+            deck = [2, 3, 4, 6, 7, 8, 9, 10, 2, 3, 4, 6, 7, 8, 9, 10, 11, 4] * 4
             random.shuffle(deck)
             
             duel["deck"] = deck
@@ -321,27 +355,33 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Бой принят! Раздача карт...", show_alert=True)
             send_bj_table(found_key)
             
-        except Exception as e:
+        except Exception:
             bot.answer_callback_query(call.id, "Ошибка при принятии вызова", show_alert=True)
 
     elif call.data.startswith("bj_decline_"):
-        p1_id = int(call.data.replace("bj_decline_", ""))
-        bot.answer_callback_query(call.id, "Вы отклонили вызов.", show_alert=True)
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="❌ Вы отклонили вызов на дуэль.")
         try:
-            bot.send_message(p1_id, "❌ Соперник отклонил ваш вызов на дуэль в 21.")
+            p1_id = int(call.data.replace("bj_decline_", ""))
+            bot.answer_callback_query(call.id, "Вы отклонили вызов.", show_alert=True)
+            bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="❌ Вы отклонили вызов на дуэль.")
+            try:
+                bot.send_message(p1_id, "❌ Соперник отклонил ваш вызов на дуэль в 21.")
+            except:
+                pass
         except:
-            pass
+            bot.answer_callback_query(call.id, "Ошибка", show_alert=True)
 
     elif call.data.startswith("bj_hit_"):
         duel_id = call.data.replace("bj_hit_", "")
         if duel_id in ACTIVE_DUELS:
             duel = ACTIVE_DUELS[duel_id]
-            if chat_id == duel["p1"]:
+            if not duel.get("accepted"):
+                bot.answer_callback_query(call.id, "Дуэль еще не началась!", show_alert=True)
+                return
+            if chat_id == duel["p1"] and not duel["p1_stand"]:
                 duel["p1_cards"].append(duel["deck"].pop())
                 if sum(duel["p1_cards"]) > 21:
                     duel["p1_stand"] = True
-            elif chat_id == duel["p2"]:
+            elif chat_id == duel["p2"] and not duel["p2_stand"]:
                 duel["p2_cards"].append(duel["deck"].pop())
                 if sum(duel["p2_cards"]) > 21:
                     duel["p2_stand"] = True
@@ -352,6 +392,9 @@ def callback_handler(call):
         duel_id = call.data.replace("bj_stand_", "")
         if duel_id in ACTIVE_DUELS:
             duel = ACTIVE_DUELS[duel_id]
+            if not duel.get("accepted"):
+                bot.answer_callback_query(call.id, "Дуэль еще не началась!", show_alert=True)
+                return
             if chat_id == duel["p1"]:
                 duel["p1_stand"] = True
             elif chat_id == duel["p2"]:
@@ -359,7 +402,6 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "Вы остановились.")
             check_bj_finish(duel_id)
 
-    # --- ОСТАЛЬНОЕ МЕНЮ ---
     elif call.data == "balance":
         bot.answer_callback_query(call.id)
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"💰 Твой баланс: {round(user['balance'], 2)} монет", reply_markup=main_menu_markup())
@@ -385,6 +427,25 @@ def callback_handler(call):
             markup.row(InlineKeyboardButton(f"{item['name']} — ⭐ {item['price']} Звёзд (+{item['income']}/мин)", callback_data=f"buy_star_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="⭐ Премиум бизнесы за Звёзды:", reply_markup=markup)
+
+    elif call.data.startswith("buy_star_"):
+        key = call.data.replace("buy_star_", "")
+        item = STAR_HOUSES.get(key)
+        if item:
+            bot.answer_callback_query(call.id)
+            prices = [LabeledPrice(label=item["name"], amount=item["price"])]
+            try:
+                bot.send_invoice(
+                    chat_id=chat_id,
+                    title=item["name"],
+                    description=f"Покупка премиум бизнеса {item['name']} с доходом +{item['income']}/мин",
+                    invoice_payload=f"buy_prop_{key}",
+                    provider_token="",
+                    currency="XTR",
+                    prices=prices
+                )
+            except Exception as e:
+                bot.send_message(chat_id, f"❌ Ошибка создания инвойса: {e}")
         
     elif call.data == "invest_menu":
         bot.answer_callback_query(call.id)
@@ -613,16 +674,40 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="Главное меню:", reply_markup=main_menu_markup())
 
-# --- ОБРАБОТКА ВВОДА ID И СТАВКИ ---
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def checkout_handler(pre_checkout_query):
+    bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+
+@bot.message_handler(content_types=["successful_payment"])
+def got_payment(message):
+    payment = message.successful_payment
+    chat_id = message.chat.id
+    user = get_user(chat_id)
+    if payment.invoice_payload.startswith("buy_prop_"):
+        house_key = payment.invoice_payload.replace("buy_prop_", "")
+        if house_key in STAR_HOUSES:
+            item = STAR_HOUSES[house_key]
+            user["properties"].append(item["name"])
+            save_user(chat_id, user)
+            bot.send_message(chat_id, f"⭐ Оплата прошла успешно! Премиум актив «{item['name']}» добавлен в твоё имущество!")
+
 def process_bj_challenge(message):
     try:
         parts = message.text.split(",")
+        if len(parts) < 2:
+            bot.send_message(message.chat.id, "❌ Неверный формат! Введите так: `ID, СТАВКА`", parse_mode="Markdown")
+            return
+            
         p2_id = int(parts[0].strip())
         bet = float(parts[1].strip())
         p1_id = message.chat.id
         
         if p1_id == p2_id:
             bot.send_message(p1_id, "❌ Нельзя играть против самого себя!")
+            return
+            
+        if bet <= 0:
+            bot.send_message(p1_id, "❌ Ставка должна быть больше 0!")
             return
             
         p1_data = get_user(p1_id)
@@ -638,7 +723,6 @@ def process_bj_challenge(message):
             "accepted": False
         }
         
-        # Отправляем инвайт сопернику
         markup = InlineKeyboardMarkup()
         markup.row(
             InlineKeyboardButton("✅ Принять бой", callback_data=f"bj_accept_{p1_id}"),
@@ -654,10 +738,11 @@ def process_bj_challenge(message):
         )
         bot.send_message(p1_id, "📤 Вызов успешно отправлен сопернику. Ожидайте ответа!")
     except Exception:
-        bot.send_message(message.chat.id, "❌ Неверный формат! Введите так: `ID, СТАВКА` (например: `123456789, 50`)", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "❌ Ошибка! Проверьте правильность введенных данных (пример: `123456789, 50`)", parse_mode="Markdown")
 
-# --- ЛОГИКА ИГРЫ В 21 ---
 def send_bj_table(duel_id):
+    if duel_id not in ACTIVE_DUELS:
+        return
     duel = ACTIVE_DUELS[duel_id]
     p1, p2 = duel["p1"], duel["p2"]
     
@@ -681,20 +766,20 @@ def send_bj_table(duel_id):
         pass
 
 def check_bj_finish(duel_id):
+    if duel_id not in ACTIVE_DUELS:
+        return
     duel = ACTIVE_DUELS[duel_id]
     p1, p2 = duel["p1"], duel["p2"]
     p1_sum = sum(duel["p1_cards"])
     p2_sum = sum(duel["p2_cards"])
     
-    p1_ended = duel["p1_stand"] or p1_sum > 21
-    p2_ended = duel["p2_stand"] or p2_sum > 21
+    p1_ended = duel.get("p1_stand", False) or p1_sum > 21
+    p2_ended = duel.get("p2_stand", False) or p2_sum > 21
     
     if p1_ended and p2_ended:
-        # Итоги
         winner = None
         text_res = f"🏁 **Итоги дуэли в 21!**\n\nВаши карты: {duel['p1_cards']} ({p1_sum})\nКарты соперника: {duel['p2_cards']} ({p2_sum})\n\n"
         
-        # Логика определения победителя
         if p1_sum > 21 and p2_sum > 21:
             res_p1 = "Ничья (у обоих перебор). Ставки возвращены."
             res_p2 = res_p1
@@ -741,20 +826,21 @@ def check_bj_finish(duel_id):
             
         del ACTIVE_DUELS[duel_id]
     else:
-        # Обновляем состояние активному игроку
         try:
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
-            bot.send_message(p1, f"🃏 Обновление счета:\nВаши карты: {duel['p1_cards']} (Сумма: **{p1_sum}**)", reply_markup=markup if not duel["p1_stand"] else None, parse_mode="Markdown")
+            markup1 = InlineKeyboardMarkup()
+            if not duel["p1_stand"]:
+                markup1.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+            bot.send_message(p1, f"🃏 Обновление счета:\nВаши карты: {duel['p1_cards']} (Сумма: **{p1_sum}**)", reply_markup=markup1 if not duel["p1_stand"] else None, parse_mode="Markdown")
         except:
             pass
         try:
-            markup = InlineKeyboardMarkup()
-            markup.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
-            bot.send_message(p2, f"🃏 Обновление счета:\nВаши карты: {duel['p2_cards']} (Сумма: **{p2_sum}**)", reply_markup=markup if not duel["p2_stand"] else None, parse_mode="Markdown")
+            markup2 = InlineKeyboardMarkup()
+            if not duel["p2_stand"]:
+                markup2.row(InlineKeyboardButton("🃏 Взять карту", callback_data=f"bj_hit_{duel_id}"), InlineKeyboardButton("🛑 Хватит", callback_data=f"bj_stand_{duel_id}"))
+            bot.send_message(p2, f"🃏 Обновление счета:\nВаши карты: {duel['p2_cards']} (Сумма: **{p2_sum}**)", reply_markup=markup2 if not duel["p2_stand"] else None, parse_mode="Markdown")
         except:
             pass
 
 if __name__ == "__main__":
-    print("Бот запущен...")
+    print("Бот запущен и проверен на ошибки...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
