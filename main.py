@@ -291,7 +291,10 @@ def callback_handler(call):
 
     elif call.data == "balance":
         bot.answer_callback_query(call.id)
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"💰 Баланс: {round(user_data['balance'], 2)} монет", reply_markup=main_menu_markup())
+        text = f"💰 **Ваш баланс:** **{round(user_data['balance'], 2)} монет**"
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "income_info":
         income = calculate_income_per_10_min(user_data)
@@ -305,17 +308,21 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
         for key, item in HOUSES.items():
-            markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет", callback_data=f"buy_coin_{key}"))
+            # Отображаем стоимость и доход за 10 минут (income * 600)
+            ten_min_inc = item['income'] * 600
+            markup.row(InlineKeyboardButton(f"{item['name']} | 💰 {item['price']} | ⏱️ +{round(ten_min_inc, 1)}/10м", callback_data=f"buy_coin_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🏪 Магазин бизнесов (20 уровней):", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="🏪 Магазин бизнесов (Цена | Доход за 10 мин):", reply_markup=markup)
 
     elif call.data == "invest_menu":
         bot.answer_callback_query(call.id)
         markup = InlineKeyboardMarkup()
         for key, item in INVESTMENTS.items():
-            markup.row(InlineKeyboardButton(f"{item['name']} — {item['price']} монет", callback_data=f"buy_inv_{key}"))
+            # Отображаем стоимость и доход за 10 минут (income * 600)
+            ten_min_inc = item['income'] * 600
+            markup.row(InlineKeyboardButton(f"{item['name']} | 💰 {item['price']} | ⏱️ +{round(ten_min_inc, 1)}/10м", callback_data=f"buy_inv_{key}"))
         markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Инвестиции (20 вариантов):", reply_markup=markup)
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text="📈 Инвестиции (Цена | Доход за 10 мин):", reply_markup=markup)
 
     elif call.data.startswith("buy_inv_") or call.data.startswith("buy_coin_"):
         is_inv = call.data.startswith("buy_inv_")
@@ -328,19 +335,20 @@ def callback_handler(call):
             save_user(chat_id, user_data, -item["price"], f"Покупка: {item['name']}")
             bot.answer_callback_query(call.id, f"Успешно куплено: {item['name']}!", show_alert=True)
             
-            # Возвращаем пользователя обратно в соответствующий каталог, чтобы он видел обновление
             if is_inv:
                 markup = InlineKeyboardMarkup()
                 for k, it in INVESTMENTS.items():
-                    markup.row(InlineKeyboardButton(f"{it['name']} — {it['price']} монет", callback_data=f"buy_inv_{k}"))
+                    ten_min_inc = it['income'] * 600
+                    markup.row(InlineKeyboardButton(f"{it['name']} | 💰 {it['price']} | ⏱️ +{round(ten_min_inc, 1)}/10м", callback_data=f"buy_inv_{k}"))
                 markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n📈 Инвестиции (20 вариантов):", reply_markup=markup, parse_mode="Markdown")
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n📈 Инвестиции:", reply_markup=markup, parse_mode="Markdown")
             else:
                 markup = InlineKeyboardMarkup()
                 for k, it in HOUSES.items():
-                    markup.row(InlineKeyboardButton(f"{it['name']} — {it['price']} монет", callback_data=f"buy_coin_{k}"))
+                    ten_min_inc = it['income'] * 600
+                    markup.row(InlineKeyboardButton(f"{it['name']} | 💰 {it['price']} | ⏱️ +{round(ten_min_inc, 1)}/10м", callback_data=f"buy_coin_{k}"))
                 markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
-                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n🏪 Магазин бизнесов (20 уровней):", reply_markup=markup, parse_mode="Markdown")
+                bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"✅ Вы успешно купили **{item['name']}**!\n\n🏪 Магазин бизнесов:", reply_markup=markup, parse_mode="Markdown")
         else:
             bot.answer_callback_query(call.id, "Недостаточно средств!", show_alert=True)
 
@@ -466,7 +474,7 @@ def got_payment(message):
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=income_loop, daemon=True).start()
-    logging.info("Бот с полноценными покупками, списанием баланса и начислением доходов запущен.")
+    logging.info("Бот с отображением доходов в магазинах запущен.")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)
