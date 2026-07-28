@@ -2,6 +2,7 @@ import time
 import logging
 import sqlite3
 import random
+import threading
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, LabeledPrice
 
@@ -18,7 +19,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             chat_id INTEGER PRIMARY KEY,
-            balance REAL DEFAULT 15.0,
+            balance REAL DEFAULT 100.0,
             properties TEXT DEFAULT "",
             investments TEXT DEFAULT "",
             accessories TEXT DEFAULT "",
@@ -80,12 +81,12 @@ def get_user(chat_id):
     row = cursor.fetchone()
     if not row:
         cursor.execute("INSERT INTO users (chat_id, balance, properties, investments, accessories, equipped_accessory, last_bonus, quest_stage, quest_claimed, total_earned, total_spent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                       (chat_id, 15.0, "", "", "", "", 0, 1, 0, 0.0, 0.0))
+                       (chat_id, 100.0, "", "", "", "", 0, 1, 0, 100.0, 0.0))
         conn.commit()
         user_data = {
-            "balance": 15.0, "properties": [], "investments": [], "accessories": [], 
+            "balance": 100.0, "properties": [], "investments": [], "accessories": [], 
             "equipped": "", "last_bonus": 0, "quest_stage": 1, "quest_claimed": 0,
-            "total_earned": 0.0, "total_spent": 0.0
+            "total_earned": 100.0, "total_spent": 0.0
         }
     else:
         user_data = {
@@ -184,10 +185,57 @@ INVESTMENTS = {
     "inv_20": {"name": "✨ Сингулярный фонд", "price": 250000000, "income": 1500000.0}
 }
 
+def calculate_income_per_10_min(user_data):
+    total_sec = 0.0
+    all_items = {**HOUSES, **INVESTMENTS}
+    name_to_income = {item["name"]: item["income"] for item in all_items.values()}
+    
+    for prop in user_data["properties"]:
+        if prop in name_to_income:
+            total_sec += name_to_income[prop]
+    for inv in user_data["investments"]:
+        if inv in name_to_income:
+            total_sec += name_to_income[inv]
+            
+    return total_sec * 600
+
+def income_loop():
+    while True:
+        time.sleep(600)
+        try:
+            conn = sqlite3.connect("game.db", check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("SELECT chat_id, balance, properties, investments, total_earned FROM users")
+            rows = cursor.fetchall()
+            
+            for row in rows:
+                chat_id, balance, props_str, invs_str, total_earned = row
+                props = props_str.split(",") if props_str else []
+                invs = invs_str.split(",") if invs_str else []
+                
+                user_data = {"properties": props, "investments": invs}
+                income = calculate_income_per_10_min(user_data)
+                
+                if income > 0:
+                    new_balance = balance + income
+                    new_total = total_earned + income
+                    cursor.execute("UPDATE users SET balance = ?, total_earned = ? WHERE chat_id = ?", (new_balance, new_total, chat_id))
+                    cursor.execute("INSERT INTO transactions (chat_id, amount, type, timestamp) VALUES (?, ?, ?, ?)",
+                                   (chat_id, income, "Доход за 10 мин", int(time.time())))
+                    try:
+                        bot.send_message(chat_id, f"💰 Прошло 10 минут! Вам начислен доход от бизнесов и инвестиций: **+{round(income, 2)} монет**.", parse_mode="Markdown")
+                    except Exception:
+                        pass
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.error(f"Ошибка в потоке доходов: {e}")
+
 def main_menu_markup():
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("👤 Профиль", callback_data="profile_menu"), InlineKeyboardButton("💰 Баланс", callback_data="balance"))
     markup.row(InlineKeyboardButton("🏢 Бизнесы", callback_data="shop"), InlineKeyboardButton("📈 Инвестиции", callback_data="invest_menu"))
+    markup.row(InlineKeyboardButton("⏱️ Доход за 10 мин", callback_data="income_info"))
     markup.row(InlineKeyboardButton("🎒 Инвентарь", callback_data="inventory_menu"), InlineKeyboardButton("📂 Имущество", callback_data="my_props"))
     markup.row(InlineKeyboardButton("⭐ Донат-магазин", callback_data="donate_shop"), InlineKeyboardButton("📜 История доходов", callback_data="history_menu"))
     markup.row(InlineKeyboardButton("🏛️ Аукцион", callback_data="auction_menu"), InlineKeyboardButton("🛒 Рынoк", callback_data="market_menu"))
@@ -197,7 +245,7 @@ def main_menu_markup():
 @bot.message_handler(commands=["start"])
 def send_welcome(message):
     get_user(message.chat.id)
-    bot.send_message(message.chat.id, "🌆 Добро пожаловать! Экономика ужесточена, добавлено по 20 бизнесов и инвестиций.", reply_markup=main_menu_markup())
+    bot.send_message(message.chat.id, "🌆 Добро пожаловать! Вам начислено 100 монет на старте.", reply_markup=main_menu_markup())
 
 @bot.message_handler(commands=["addmoney"])
 def cmd_add_money(message):
@@ -232,7 +280,7 @@ def callback_handler(call):
         bot.answer_callback_query(call.id)
         equipped_str = f"✨ {user_data['equipped']}" if user_data['equipped'] else "✨ Ничего"
         text = (
-            f"👤 **Профиль (Строгая экономика)**\n\n"
+            f"👤 **Профиль**\n\n"
             f"🆔 ID: `{chat_id}`\n"
             f"💰 Баланс: **{round(user_data['balance'], 2)} монет**\n"
             f"📈 Всего заработано: **{round(user_data['total_earned'], 2)} монет**\n"
@@ -244,6 +292,14 @@ def callback_handler(call):
     elif call.data == "balance":
         bot.answer_callback_query(call.id)
         bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=f"💰 Баланс: {round(user_data['balance'], 2)} монет", reply_markup=main_menu_markup())
+
+    elif call.data == "income_info":
+        income = calculate_income_per_10_min(user_data)
+        bot.answer_callback_query(call.id)
+        text = f"⏱️ **Ваш пассивный доход**\n\nКаждые 10 минут вы получаете: **{round(income, 2)} монет** от ваших бизнесов и инвестиций."
+        markup = InlineKeyboardMarkup()
+        markup.row(InlineKeyboardButton("🔙 Главное меню", callback_data="menu"))
+        bot.edit_message_text(chat_id=chat_id, message_id=call.message.message_id, text=text, reply_markup=markup, parse_mode="Markdown")
 
     elif call.data == "shop":
         bot.answer_callback_query(call.id)
@@ -396,7 +452,8 @@ def got_payment(message):
 
 if __name__ == "__main__":
     init_db()
-    logging.info("Бот со строгой экономикой (по 20 бизнесов и инвестиций) запущен.")
+    threading.Thread(target=income_loop, daemon=True).start()
+    logging.info("Бот с 100 монетами на старте запущен.")
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=20)
